@@ -1,0 +1,13 @@
+{
+  "name": "levelling-up",
+  "version": "1.0.0",
+  "description": "RPG-styled personal self-improvement tracker, built as an installable PWA.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "serve": "npx http-server . -p 8080 -c-1",
+    "icons": "node scripts/make-icons.js"
+  },
+  "license": "MIT"
+}
