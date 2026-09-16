@@ -36,6 +36,11 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: Stamp build id into the service worker and app
+        run: |
+          BUILD="${GITHUB_SHA::7}"
+          sed -i "s/__BUILD__/${BUILD}/g" sw.js js/app.js
+          grep -q "$BUILD" sw.js && grep -q "$BUILD" js/app.js
       - uses: actions/configure-pages@v5
         with:
           enablement: true

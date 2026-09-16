@@ -8,7 +8,8 @@ import {
   esc, renderDashboard, renderCategory, renderCategoryForm, renderWeekly, renderSettings, renderNotFound,
 } from './ui.js';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
+const BUILD = '__BUILD__'; // stamped by CI with the deployed commit
 const store = createStore();
 const screenEl = document.getElementById('screen');
 const modalRoot = document.getElementById('modal-root');
@@ -17,6 +18,8 @@ const toastRoot = document.getElementById('toast-root');
 
 const ctx = {
   version: VERSION,
+  build: BUILD.startsWith('__') ? 'dev' : BUILD,
+  updateReady: false,
   standalone: window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true,
   isIOS: /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1),
   persisted: false,
@@ -214,6 +217,8 @@ const actions = {
     toast('Category deleted');
   },
 
+  'check-updates': checkForUpdates,
+  'apply-update': applyUpdate,
   export: exportBackup,
   import: () => openModal({
     title: 'Import backup',
@@ -344,11 +349,96 @@ async function importBackup(text) {
   toast('Backup imported');
 }
 
+// ---- Updates ------------------------------------------------------------------
+let swReg = null;
+let reloading = false;
+
+async function registerServiceWorker() {
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+  try {
+    swReg = await navigator.serviceWorker.register('./sw.js');
+  } catch (err) {
+    console.warn('SW registration failed', err);
+    return;
+  }
+  const watch = (worker) => {
+    if (!worker) return;
+    worker.addEventListener('statechange', () => {
+      if (worker.state === 'installed' && navigator.serviceWorker.controller) announceUpdate();
+    });
+  };
+  if (swReg.waiting && navigator.serviceWorker.controller) announceUpdate();
+  watch(swReg.installing);
+  swReg.addEventListener('updatefound', () => watch(swReg.installing));
+  // On the very first visit the new worker claims the page (clients.claim);
+  // that's not an update, so only reload when a worker was already in charge.
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloading || !hadController) return;
+    reloading = true;
+    try { sessionStorage.setItem('lu-updated', '1'); } catch { /* ignore */ }
+    location.reload();
+  });
+}
+
+function announceUpdate() {
+  if (ctx.updateReady) return;
+  ctx.updateReady = true;
+  toast('Update ready. Tap to refresh', { ms: 8000, action: applyUpdate });
+  if (route().name === 'settings') render();
+}
+
+/** Switch to the waiting service worker; the controllerchange handler reloads. */
+async function applyUpdate() {
+  if (swReg && swReg.waiting) {
+    swReg.waiting.postMessage({ type: 'SKIP_WAITING' });
+    return;
+  }
+  location.reload();
+}
+
+function askWorker(message) {
+  return new Promise((resolve) => {
+    const worker = navigator.serviceWorker && navigator.serviceWorker.controller;
+    if (!worker) return resolve(null);
+    const channel = new MessageChannel();
+    const timer = setTimeout(() => resolve(null), 15000);
+    channel.port1.onmessage = (e) => { clearTimeout(timer); resolve(e.data); };
+    worker.postMessage(message, [channel.port2]);
+  });
+}
+
+/**
+ * Settings → Check for updates. Looks for a new service worker (a new deploy),
+ * and if there is one switches to it. Otherwise re-fetches the shell files
+ * from the network into the cache and reloads, so a same-build change still
+ * lands. Either way the user sees the latest code within a few seconds.
+ */
+async function checkForUpdates(_, el) {
+  if (el) { el.disabled = true; el.textContent = 'Checking…'; }
+  try {
+    if (!swReg) { location.reload(); return; }
+    await swReg.update();
+    // Give a freshly-found worker a moment to install.
+    for (let i = 0; i < 20 && swReg.installing; i++) await new Promise((r) => setTimeout(r, 250));
+    if (swReg.waiting) { await applyUpdate(); return; }
+    const res = await askWorker({ type: 'REFRESH_SHELL' });
+    if (res && res.ok === false) throw new Error('Couldn’t reach the server. Check your connection and try again.');
+    try { sessionStorage.setItem('lu-updated', '1'); } catch { /* ignore */ }
+    reloading = true;
+    location.reload();
+  } catch (err) {
+    toast(err.message || 'Update check failed');
+    if (el) { el.disabled = false; el.textContent = '⟳ Check for updates'; }
+  }
+}
+
 // ---- Feedback ----------------------------------------------------------------
-function toast(message, { xp = false, ms = 2200 } = {}) {
-  const el = document.createElement('div');
-  el.className = `toast ${xp ? 'toast--xp' : ''}`;
+function toast(message, { xp = false, ms = 2200, action = null } = {}) {
+  const el = document.createElement(action ? 'button' : 'div');
+  el.className = `toast ${xp ? 'toast--xp' : ''} ${action ? 'toast--action' : ''}`;
   el.textContent = message;
+  if (action) el.addEventListener('click', () => { el.remove(); action(); });
   toastRoot.appendChild(el);
   setTimeout(() => el.remove(), ms);
 }
@@ -430,9 +520,13 @@ function nextCelebration() {
     if (now !== lastDay) { lastDay = now; store.refresh(); } else render();
   });
 
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('SW registration failed', err));
-  }
+  registerServiceWorker();
+  try {
+    if (sessionStorage.getItem('lu-updated')) {
+      sessionStorage.removeItem('lu-updated');
+      toast(`You're on the latest version (${VERSION} · ${ctx.build})`, { ms: 3200 });
+    }
+  } catch { /* ignore */ }
 })();
 
 // Expose for debugging in Safari's Web Inspector.

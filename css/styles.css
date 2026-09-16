@@ -387,6 +387,8 @@ textarea.input { min-height: 110px; font-family: ui-monospace, Menlo, monospace;
   max-width: 90%;
 }
 .toast--xp { background: var(--sun); color: var(--wood); border-color: var(--wood); }
+.toast--action { pointer-events: auto; cursor: pointer; background: var(--grass); color: var(--wood); border-color: var(--wood); font: inherit; font-family: var(--font-display); font-weight: 800; }
+.toast--action::after { content: " ›"; }
 
 /* ---- Settings bits --------------------------------------------------------- */
 .kv { display: flex; justify-content: space-between; gap: 12px; font-size: 0.9rem; padding: 6px 0; }

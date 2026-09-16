@@ -50,6 +50,14 @@ immune, so use **Settings → Export JSON** for a backup every so often. The
 export goes through the iOS share sheet, so it can be saved to Files or
 AirDropped straight to a Mac.
 
+## Updates
+
+Every deploy is stamped with its commit (CI rewrites `__BUILD__` in `sw.js`
+and `js/app.js`), which makes it a new service worker. An installed app
+notices in the background and shows an "Update ready" toast; **Settings →
+Check for updates** fetches the latest immediately. The version row in
+Settings shows which build is running.
+
 ## Deploying
 
 **GitHub Pages**: the included workflow (`.github/workflows/ci.yml`) runs the

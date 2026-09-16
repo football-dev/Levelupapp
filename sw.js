@@ -1,6 +1,7 @@
-// Minimal offline shell cache. Bump CACHE_VERSION whenever shell files change
-// so installed apps pick up the new version on next launch.
-const CACHE_VERSION = 'levelling-up-v2';
+// Minimal offline shell cache. CI stamps __BUILD__ with the deployed commit,
+// so every deploy is a new service worker and installed apps can detect it.
+const BUILD = '__BUILD__';
+const CACHE_VERSION = `levelling-up-${BUILD}`;
 const SHELL = [
   './',
   './index.html',
@@ -20,10 +21,27 @@ const SHELL = [
   './icons/apple-touch-icon.png',
 ];
 
+// Install pre-caches the new shell but waits: the page decides when to switch
+// over (via SKIP_WAITING) so an update never reloads someone mid-tap.
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()),
-  );
+  event.waitUntil(caches.open(CACHE_VERSION).then((cache) => cache.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))));
+});
+
+self.addEventListener('message', (event) => {
+  const { type } = event.data || {};
+  if (type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  } else if (type === 'REFRESH_SHELL') {
+    // Re-fetch every shell file straight from the network into the current cache.
+    const reply = (ok) => event.ports[0] && event.ports[0].postMessage({ ok });
+    event.waitUntil(
+      caches.open(CACHE_VERSION)
+        .then((cache) => cache.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
+        .then(() => reply(true), () => reply(false)),
+    );
+  } else if (type === 'GET_BUILD') {
+    if (event.ports[0]) event.ports[0].postMessage({ build: BUILD });
+  }
 });
 
 self.addEventListener('activate', (event) => {

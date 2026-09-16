@@ -460,7 +460,11 @@ export function renderSettings(state, ctx) {
       <div class="kv"><span>Storage</span><span>${state.storageKind === 'indexeddb' ? 'IndexedDB' : state.storageKind === 'localstorage' ? 'localStorage (fallback)' : 'Memory'}</span></div>
       <div class="kv"><span>Storage protected</span><span>${ctx.persisted ? 'Yes' : 'Best effort'}</span></div>
       <div class="kv"><span>Level curve</span><span>50 × n<sup>1.5</sup> (Lv 2 at ${xpForLevel(1)} XP)</span></div>
-      <div class="kv"><span>Version</span><span>${esc(ctx.version)}</span></div>
+      <div class="kv"><span>Version</span><span>${esc(ctx.version)} · ${esc(ctx.build)}</span></div>
+      ${ctx.updateReady
+        ? `<button class="btn btn--sun btn--block" style="margin-top:10px" data-action="apply-update">⬆︎ Update ready, refresh now</button>`
+        : `<button class="btn btn--cream btn--block" style="margin-top:10px" data-action="check-updates">⟳ Check for updates</button>`}
+      <p class="hint">Installed apps pick up new versions in the background. Tap to fetch the latest right now.</p>
     </section>
 
     <section class="panel">
