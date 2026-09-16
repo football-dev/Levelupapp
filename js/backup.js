@@ -17,6 +17,7 @@ export function buildBackup(state) {
       weeklyBonuses: state.meta.weeklyBonuses || {},
       installPromptDismissed: !!state.meta.installPromptDismissed,
       highestPlayerLevel: state.meta.highestPlayerLevel || 1,
+      seeded: !!state.meta.seeded,
     },
   };
 }
@@ -44,7 +45,7 @@ export function parseBackup(json) {
     if (!isStr(c.id) || !isStr(c.name)) throw new Error(`Category ${i + 1} is malformed.`);
     return {
       id: c.id, name: c.name, colour: isStr(c.colour) ? c.colour : '#8FD14F',
-      icon: isStr(c.icon) ? c.icon : '⭐', createdAt: isStr(c.createdAt) ? c.createdAt : new Date().toISOString(),
+      icon: isStr(c.icon) ? c.icon : '⭐', mode: c.mode === 'goals' ? 'goals' : 'daily', createdAt: isStr(c.createdAt) ? c.createdAt : new Date().toISOString(),
       order: isNum(c.order) ? c.order : i, totalXP: isNum(c.totalXP) ? Math.max(0, c.totalXP) : 0,
       level: 1, highestLevel: isNum(c.highestLevel) ? c.highestLevel : 1, streakCount: 0, lastActivityDate: null,
     };
@@ -58,7 +59,7 @@ export function parseBackup(json) {
       return {
         id: t.id, categoryId: t.categoryId, title: t.title,
         xpValue: isNum(t.xpValue) ? t.xpValue : 10,
-        completedDates: Array.isArray(t.completedDates) ? [...new Set(t.completedDates.filter(isISODate))].sort() : [],
+        completions: normaliseCompletions(t),
         createdAt: isStr(t.createdAt) ? t.createdAt : new Date().toISOString(),
       };
     });
@@ -94,8 +95,26 @@ export function parseBackup(json) {
       weeklyBonuses: meta.weeklyBonuses && typeof meta.weeklyBonuses === 'object' ? meta.weeklyBonuses : {},
       installPromptDismissed: !!meta.installPromptDismissed,
       highestPlayerLevel: isNum(meta.highestPlayerLevel) ? meta.highestPlayerLevel : 1,
+      seeded: true,
     },
   };
+}
+
+/** Accepts both the current `completions` shape and the original `completedDates` list. */
+function normaliseCompletions(task) {
+  const byDate = new Map();
+  if (Array.isArray(task.completedDates)) {
+    for (const d of task.completedDates) if (isISODate(d)) byDate.set(d, { date: d, done: true });
+  }
+  if (Array.isArray(task.completions)) {
+    for (const c of task.completions) {
+      if (!c || !isISODate(c.date)) continue;
+      const entry = { date: c.date, done: c.done !== false };
+      if (isStr(c.note)) entry.note = c.note.slice(0, 500);
+      byDate.set(c.date, entry);
+    }
+  }
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
 export function backupFilename(date = new Date()) {

@@ -4,8 +4,19 @@
 import { openStorage } from './db.js';
 import { toISODate, mondayOf } from './dates.js';
 import {
-  levelFromXP, playerXP, categoryStreak, shortId, WEEKLY_BONUS_XP,
+  levelFromXP, playerXP, categoryStreak, shortId, WEEKLY_BONUS_XP, completionOn,
 } from './xp.js';
+
+/** How a category earns XP: 'daily' = habit checklist + streak, 'goals' = weekly goals + milestones. */
+export const MODES = ['daily', 'goals'];
+
+/** The v1 category set, created on first launch (and after a reset). No tasks are pre-populated. */
+export const SEED_CATEGORIES = [
+  { name: 'Career Growth', icon: '💼', colour: '#7EC8E3', mode: 'goals' },
+  { name: 'Health', icon: '🏃', colour: '#8FD14F', mode: 'daily' },
+  { name: 'Reading/Learning', icon: '📚', colour: '#FFC93C', mode: 'daily' },
+  { name: 'Mindset/Discipline', icon: '🧠', colour: '#F2784B', mode: 'daily' },
+];
 
 export const DEFAULT_COLOURS = ['#8FD14F', '#FFC93C', '#F2784B', '#7EC8E3', '#C39BD3', '#F58FB0', '#5DADE2', '#A3E4D7'];
 export const DEFAULT_ICONS = ['⚽', '🏋️', '📚', '🧠', '💛', '🌱', '🎨', '🎸', '💼', '🏃', '🥗', '🧘', '💰', '🛠️', '🎯', '🍎'];
@@ -20,6 +31,7 @@ function emptyMeta() {
     weeklyBonuses: {}, // `${categoryId}:${weekOf}` -> true
     installPromptDismissed: false,
     highestPlayerLevel: 1, // celebrations only fire for a new personal best
+    seeded: false, // default categories created once; deleting them is respected
   };
 }
 
@@ -47,11 +59,34 @@ export function createStore() {
 
   // ---- derived -----------------------------------------------------------
   function recalcCategory(cat) {
+    if (!MODES.includes(cat.mode)) cat.mode = 'daily';
     const tasks = state.dailyTasks.filter((t) => t.categoryId === cat.id);
     const { streakCount, lastActivityDate } = categoryStreak(tasks, today());
-    cat.streakCount = streakCount;
+    // Streaks are a daily-habit concept; project-style categories don't carry one.
+    cat.streakCount = cat.mode === 'goals' ? 0 : streakCount;
     cat.lastActivityDate = lastActivityDate;
     cat.level = levelFromXP(cat.totalXP);
+  }
+
+  /** Upgrade records written by earlier versions of the app. */
+  function migrate() {
+    for (const t of state.dailyTasks) {
+      if (!Array.isArray(t.completions)) {
+        t.completions = (t.completedDates || []).map((date) => ({ date, done: true }));
+        delete t.completedDates;
+        t._dirty = true;
+      }
+    }
+  }
+
+  async function seedDefaults() {
+    const now = new Date().toISOString();
+    state.categories = SEED_CATEGORIES.map((c, i) => ({
+      id: shortId(), ...c, createdAt: now, order: i,
+      totalXP: 0, level: 1, highestLevel: 1, streakCount: 0, lastActivityDate: null,
+    }));
+    await storage.putMany('categories', state.categories);
+    state.meta.seeded = true;
   }
 
   function recalcAll() {
@@ -131,6 +166,13 @@ export function createStore() {
       state.weeklyGoals = weeklyGoals.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
       state.milestones = milestones.sort((a, b) => a.targetLevel - b.targetLevel);
       state.meta = { ...emptyMeta(), ...(metas.find((m) => m.id === META_ID) || {}) };
+      migrate();
+      const dirty = state.dailyTasks.filter((t) => t._dirty);
+      if (dirty.length) {
+        dirty.forEach((t) => delete t._dirty);
+        await storage.putMany('dailyTasks', dirty);
+      }
+      if (!state.categories.length && !state.meta.seeded) await seedDefaults();
       recalcAll();
       state.categories.forEach((c) => { c.highestLevel = Math.max(c.highestLevel || 1, c.level); });
       state.meta.highestPlayerLevel = Math.max(state.meta.highestPlayerLevel || 1, levelFromXP(playerXP(state.categories)));
@@ -144,9 +186,9 @@ export function createStore() {
     refresh() { recalcAll(); notify(); },
 
     // ---- categories ----
-    async addCategory({ name, colour, icon }) {
+    async addCategory({ name, colour, icon, mode = 'daily' }) {
       const cat = {
-        id: shortId(), name: name.trim(), colour, icon,
+        id: shortId(), name: name.trim(), colour, icon, mode: MODES.includes(mode) ? mode : 'daily',
         createdAt: new Date().toISOString(),
         order: state.categories.length,
         totalXP: 0, level: 1, highestLevel: 1, streakCount: 0, lastActivityDate: null,
@@ -161,6 +203,7 @@ export function createStore() {
       const cat = state.categories.find((c) => c.id === id);
       if (!cat) return;
       Object.assign(cat, patch, { name: (patch.name ?? cat.name).trim() });
+      recalcCategory(cat);
       await persist('categories', cat);
       notify();
     },
@@ -201,7 +244,7 @@ export function createStore() {
     async addTask({ categoryId, title, xpValue }) {
       const task = {
         id: shortId(), categoryId, title: title.trim(),
-        xpValue: clampXP(xpValue), completedDates: [],
+        xpValue: clampXP(xpValue), completions: [],
         createdAt: new Date().toISOString(),
       };
       state.dailyTasks.push(task);
@@ -235,16 +278,37 @@ export function createStore() {
       if (!task) return;
       const day = today();
       const before = snapshotLevels();
-      if (task.completedDates.includes(day)) {
-        task.completedDates = task.completedDates.filter((d) => d !== day);
+      const entry = completionOn(task, day);
+      if (entry && entry.done !== false) {
+        // Untick. Keep the entry if it carries a note, otherwise drop it.
+        if (entry.note) entry.done = false;
+        else task.completions = task.completions.filter((c) => c !== entry);
         await persist('dailyTasks', task);
         await addXP(task.categoryId, -task.xpValue);
       } else {
-        task.completedDates = [...task.completedDates, day].sort();
+        if (entry) entry.done = true;
+        else task.completions = [...task.completions, { date: day, done: true }].sort((a, b) => a.date.localeCompare(b.date));
         await persist('dailyTasks', task);
         await addXP(task.categoryId, task.xpValue);
       }
       await detectLevelUps(before);
+      notify();
+    },
+
+    /** Attach a free-text note to a task's log for a day. Notes aren't scored. */
+    async setTaskNote(id, date, note) {
+      const task = state.dailyTasks.find((t) => t.id === id);
+      if (!task) return;
+      const text = (note || '').trim().slice(0, 500);
+      const entry = completionOn(task, date);
+      if (entry) {
+        if (text) entry.note = text;
+        else if (entry.done !== false) delete entry.note;
+        else task.completions = task.completions.filter((c) => c !== entry);
+      } else if (text) {
+        task.completions = [...task.completions, { date, done: false, note: text }].sort((a, b) => a.date.localeCompare(b.date));
+      }
+      await persist('dailyTasks', task);
       notify();
     },
 
@@ -342,7 +406,9 @@ export function createStore() {
       state.dailyTasks = snapshot.dailyTasks;
       state.weeklyGoals = snapshot.weeklyGoals;
       state.milestones = snapshot.milestones;
-      state.meta = { ...emptyMeta(), ...snapshot.meta, id: META_ID };
+      state.meta = { ...emptyMeta(), ...snapshot.meta, id: META_ID, seeded: true };
+      migrate();
+      state.dailyTasks.forEach((t) => delete t._dirty);
       recalcAll();
       await Promise.all([
         storage.putMany('categories', state.categories),
@@ -354,8 +420,12 @@ export function createStore() {
       notify();
     },
 
+    /** Back to the fresh-install state: the four default categories, nothing else. */
     async resetAll() {
       await api.replaceAll({ categories: [], dailyTasks: [], weeklyGoals: [], milestones: [], meta: emptyMeta() });
+      await seedDefaults();
+      await persistMeta();
+      notify();
     },
   };
 

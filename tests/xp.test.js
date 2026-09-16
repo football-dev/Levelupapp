@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   xpForLevel, levelFromXP, levelProgress, playerXP,
   computeStreak, categoryStreak, streakAtRisk, MAX_LEVEL,
+  completionOn, isDoneOn, doneDates,
 } from '../js/xp.js';
 
 test('xpForLevel follows 50 * n^1.5 rounded', () => {
@@ -64,11 +65,22 @@ test('computeStreak with no dates', () => {
   assert.deepEqual(computeStreak([], '2026-09-15'), { streakCount: 0, lastActivityDate: null });
 });
 
-test('categoryStreak merges dates across tasks', () => {
+test('categoryStreak merges dates across tasks and ignores note-only logs', () => {
   const tasks = [
-    { completedDates: ['2026-09-14'] },
-    { completedDates: ['2026-09-15'] },
-    { completedDates: [] },
+    { completions: [{ date: '2026-09-14', done: true }] },
+    { completions: [{ date: '2026-09-15' }] },
+    { completions: [{ date: '2026-09-13', done: false, note: 'skipped, sick' }] },
+    { completions: [] },
   ];
   assert.equal(categoryStreak(tasks, '2026-09-15').streakCount, 2);
+});
+
+test('completion helpers treat missing done as true', () => {
+  const task = { completions: [{ date: '2026-09-15', note: 'good' }, { date: '2026-09-14', done: false, note: 'skipped' }] };
+  assert.equal(isDoneOn(task, '2026-09-15'), true);
+  assert.equal(isDoneOn(task, '2026-09-14'), false);
+  assert.equal(isDoneOn(task, '2026-09-13'), false);
+  assert.equal(completionOn(task, '2026-09-14').note, 'skipped');
+  assert.deepEqual(doneDates(task), ['2026-09-15']);
+  assert.deepEqual(doneDates({}), []);
 });

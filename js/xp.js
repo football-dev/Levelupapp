@@ -64,9 +64,27 @@ export function computeStreak(dates, today) {
   return { streakCount: streak, lastActivityDate };
 }
 
+/**
+ * A task's log for a day: `{ date, done, note? }`. `done` defaults to true
+ * when absent (the original spec shape), so an entry with `done: false` is a
+ * note-only log such as "why I skipped it".
+ */
+export function completionOn(task, date) {
+  return (task.completions || []).find((c) => c.date === date) || null;
+}
+
+export function isDoneOn(task, date) {
+  const c = completionOn(task, date);
+  return !!c && c.done !== false;
+}
+
+export function doneDates(task) {
+  return (task.completions || []).filter((c) => c.done !== false).map((c) => c.date);
+}
+
 /** Streak for a category = days on which at least one of its tasks was completed. */
 export function categoryStreak(tasks, today) {
-  const dates = tasks.flatMap((t) => t.completedDates || []);
+  const dates = tasks.flatMap(doneDates);
   return computeStreak(dates, today);
 }
 

@@ -1,9 +1,24 @@
 # Levelling Up
 
 A personal self-improvement tracker with RPG stats, built as an installable
-web app for iPhone. Custom life categories (Coaching, Fitness, Personal…)
-earn XP from daily check-ins and weekly goals, level up over time, and track
-streaks and milestones. Single user, no login, no backend.
+web app for iPhone. Life categories earn XP from daily check-ins and weekly
+goals, level up over time, and track streaks and milestones. Single user, no
+login, no backend.
+
+First launch creates four categories with nothing in them:
+
+| Category | Tracked by |
+| --- | --- |
+| Career Growth | weekly goals and milestones (no streak) |
+| Health | daily habits |
+| Reading/Learning | daily habits |
+| Mindset/Discipline | daily habits |
+
+Daily tasks are deliberately not pre-populated; add them as you go. Each
+category can be switched between the two tracking modes from its edit
+screen, and the dashboard panel changes shape to match: a daily-driven panel
+shows today's checklist and streak, a goal-driven panel shows this week's
+goals and progress toward the next milestone.
 
 ![Dashboard](docs/dashboard.png)
 
@@ -61,6 +76,12 @@ reset after a missed day.
 
 Unticking a task the same day takes the XP back, and level-up celebrations
 only fire for a new personal best so they can't be farmed by re-ticking.
+
+Every daily task can carry a short note for the day (the pencil next to it).
+Notes aren't scored. They're a log, including for days you skipped, and the
+weekly review shows the week's notes alongside the goals. Stored as
+`completions: [{ date, done, note? }]` on each task; older backups using
+`completedDates` import and migrate automatically.
 
 ## Layout
 

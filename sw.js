@@ -1,6 +1,6 @@
 // Minimal offline shell cache. Bump CACHE_VERSION whenever shell files change
 // so installed apps pick up the new version on next launch.
-const CACHE_VERSION = 'levelling-up-v1';
+const CACHE_VERSION = 'levelling-up-v2';
 const SHELL = [
   './',
   './index.html',

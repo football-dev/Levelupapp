@@ -2,12 +2,13 @@
 import { createStore, DEFAULT_COLOURS, DEFAULT_ICONS } from './store.js';
 import { buildBackup, parseBackup, backupFilename } from './backup.js';
 import { requestPersistence } from './db.js';
-import { mondayOf, toISODate } from './dates.js';
+import { mondayOf, toISODate, formatShort } from './dates.js';
+import { completionOn, isDoneOn } from './xp.js';
 import {
   esc, renderDashboard, renderCategory, renderCategoryForm, renderWeekly, renderSettings, renderNotFound,
 } from './ui.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const store = createStore();
 const screenEl = document.getElementById('screen');
 const modalRoot = document.getElementById('modal-root');
@@ -140,6 +141,21 @@ const actions = {
     submitLabel: 'Add',
     onSubmit: (d) => store.addTask({ categoryId: category, title: d.title, xpValue: d.xpValue }),
   }),
+  'task-note': ({ id }) => {
+    const t = store.state.dailyTasks.find((x) => x.id === id);
+    if (!t) return;
+    const day = toISODate();
+    const entry = completionOn(t, day);
+    openModal({
+      title: t.title,
+      body: `
+        <p class="hint" style="margin-top:0">${formatShort(day)} · ${isDoneOn(t, day) ? 'done ✓' : 'not ticked yet'}. A note is just a log, it doesn't change XP.</p>
+        <div class="field"><label for="f-note">Note for today</label>
+        <textarea class="input input--note" id="f-note" name="note" maxlength="500" placeholder="How it went, or why you skipped it">${esc(entry && entry.note ? entry.note : '')}</textarea></div>`,
+      submitLabel: 'Save note',
+      onSubmit: (d) => store.setTaskNote(id, day, d.note),
+    });
+  },
   'task-menu': ({ id }) => {
     const t = store.state.dailyTasks.find((x) => x.id === id);
     if (!t) return;
@@ -262,13 +278,14 @@ document.addEventListener('submit', async (e) => {
   const d = Object.fromEntries(new FormData(form).entries());
   const icon = (d.icon || '').trim() || DEFAULT_ICONS[0];
   if (!d.name.trim()) return toast('Give it a name');
+  const mode = d.mode === 'goals' ? 'goals' : 'daily';
   if (form.dataset.id) {
-    await store.updateCategory(form.dataset.id, { name: d.name, colour: d.colour, icon });
+    await store.updateCategory(form.dataset.id, { name: d.name, colour: d.colour, icon, mode });
     location.hash = `#/category/${form.dataset.id}`;
   } else {
-    const cat = await store.addCategory({ name: d.name, colour: d.colour, icon });
+    const cat = await store.addCategory({ name: d.name, colour: d.colour, icon, mode });
     location.hash = `#/category/${cat.id}`;
-    toast('Category created. Add a daily task to start earning XP.');
+    toast(mode === 'goals' ? 'Category created. Set a goal for this week to start earning XP.' : 'Category created. Add a daily task to start earning XP.');
   }
 });
 document.addEventListener('click', (e) => {
@@ -340,7 +357,7 @@ function flashXP(id, kind) {
   const list = kind === 'task' ? store.state.dailyTasks : store.state.weeklyGoals;
   const item = list.find((x) => x.id === id);
   if (!item) return;
-  const done = kind === 'task' ? item.completedDates.includes(toISODate()) : item.completed;
+  const done = kind === 'task' ? isDoneOn(item, toISODate()) : item.completed;
   if (done) toast(`+${item.xpValue} XP`, { xp: true, ms: 1200 });
 }
 

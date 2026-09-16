@@ -1,13 +1,14 @@
 // Screen templates. Pure functions from state to HTML strings; all
 // interaction is wired through data-action attributes handled in app.js.
-import { levelProgress, playerXP, streakAtRisk, xpForLevel, WEEKLY_BONUS_XP } from './xp.js';
-import { toISODate, mondayOf, addDays, formatWeek } from './dates.js';
+import { levelProgress, playerXP, streakAtRisk, xpForLevel, WEEKLY_BONUS_XP, isDoneOn, completionOn, doneDates } from './xp.js';
+import { toISODate, mondayOf, addDays, formatWeek, formatShort } from './dates.js';
 
 export const esc = (s) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 const attr = (s) => esc(s);
+const isGoals = (cat) => cat.mode === 'goals';
 
 // ---- shared pieces ---------------------------------------------------------
 export function xpBar(totalXP, { large = false, fill = 'var(--sun)' } = {}) {
@@ -26,45 +27,54 @@ export function streakBadge(cat, today) {
   return `<span class="streak ${risk ? 'streak--risk' : ''}" title="${risk ? 'Do something today to keep it' : 'Streak'}">🔥 ${cat.streakCount}</span>`;
 }
 
-function taskItem(t, today) {
-  const done = t.completedDates.includes(today);
+function noteButton(t, today) {
+  const entry = completionOn(t, today);
+  const has = !!(entry && entry.note);
+  return `<button class="item__note ${has ? 'item__note--has' : ''}" aria-label="${has ? 'Edit note for today' : 'Add a note for today'}" title="${has ? attr(entry.note) : 'Add a note'}" data-action="task-note" data-id="${attr(t.id)}">${has ? '📝' : '✎'}</button>`;
+}
+
+function taskItem(t, today, { compact = false } = {}) {
+  const done = isDoneOn(t, today);
+  const total = doneDates(t).length;
   return `
-    <div class="item ${done ? 'item--done' : ''}">
+    <div class="item ${done ? 'item--done' : ''} ${compact ? 'item--compact' : ''}">
       <button class="item__check" role="checkbox" aria-checked="${done}" aria-label="${done ? 'Untick' : 'Tick'} ${attr(t.title)}" data-action="toggle-task" data-id="${attr(t.id)}">${done ? '✓' : ''}</button>
       <div class="item__body">
         <div class="item__title">${esc(t.title)}</div>
-        <div class="item__meta">${t.completedDates.length} day${t.completedDates.length === 1 ? '' : 's'} done</div>
+        ${compact ? '' : `<div class="item__meta">${total} day${total === 1 ? '' : 's'} done</div>`}
       </div>
       <span class="item__xp">+${t.xpValue}</span>
-      <button class="item__more" aria-label="Task options" data-action="task-menu" data-id="${attr(t.id)}">⋯</button>
+      ${noteButton(t, today)}
+      ${compact ? '' : `<button class="item__more" aria-label="Task options" data-action="task-menu" data-id="${attr(t.id)}">⋯</button>`}
     </div>`;
 }
 
-function goalItem(g, { showCategory, categories } = {}) {
-  const cat = showCategory && categories.find((c) => c.id === g.categoryId);
+function goalItem(g, { compact = false } = {}) {
   return `
-    <div class="item ${g.completed ? 'item--done' : ''}">
+    <div class="item ${g.completed ? 'item--done' : ''} ${compact ? 'item--compact' : ''}">
       <button class="item__check" role="checkbox" aria-checked="${g.completed}" aria-label="${g.completed ? 'Untick' : 'Tick'} ${attr(g.title)}" data-action="toggle-goal" data-id="${attr(g.id)}">${g.completed ? '✓' : ''}</button>
-      <div class="item__body">
-        <div class="item__title">${esc(g.title)}</div>
-        ${cat ? `<div class="item__meta">${esc(cat.icon)} ${esc(cat.name)}</div>` : ''}
-      </div>
+      <div class="item__body"><div class="item__title">${esc(g.title)}</div></div>
       <span class="item__xp">+${g.xpValue}</span>
-      <button class="item__more" aria-label="Goal options" data-action="goal-menu" data-id="${attr(g.id)}">⋯</button>
+      ${compact ? '' : `<button class="item__more" aria-label="Goal options" data-action="goal-menu" data-id="${attr(g.id)}">⋯</button>`}
     </div>`;
 }
 
-function milestoneItem(m) {
+function milestoneItem(m, cat) {
+  const level = levelProgress(cat.totalXP).level;
+  const pct = m.achieved ? 100 : Math.min(100, Math.round((level / m.targetLevel) * 100));
   return `
     <div class="item item--milestone ${m.achieved ? 'item--done' : ''}">
       <div class="item__check" aria-hidden="true">${m.achieved ? '🏆' : '🎯'}</div>
       <div class="item__body">
         <div class="item__title">${esc(m.title)}</div>
-        <div class="item__meta">${m.achieved ? 'Achieved' : `Reach level ${m.targetLevel}`}</div>
+        <div class="item__meta">${m.achieved ? 'Achieved' : `Lv ${level} of ${m.targetLevel}`}</div>
+        ${m.achieved ? '' : `<div class="minibar"><div class="minibar__fill" style="--pct:${pct}%"></div></div>`}
       </div>
       <button class="item__more" aria-label="Milestone options" data-action="milestone-menu" data-id="${attr(m.id)}">⋯</button>
     </div>`;
 }
+
+const modeLabel = (cat) => (isGoals(cat) ? 'Goals & milestones' : 'Daily habits');
 
 // ---- Dashboard -------------------------------------------------------------
 export function renderDashboard(state, ctx) {
@@ -94,34 +104,20 @@ export function renderDashboard(state, ctx) {
       </a>`);
   }
 
+  const dailyCats = categories.filter((c) => !isGoals(c));
+  const dailyTaskCount = state.dailyTasks.filter((t) => dailyCats.some((c) => c.id === t.categoryId)).length;
   const hero = `
     <section class="panel panel--hero">
       <div class="hero-level"><span class="label">Player level</span><span class="num display">${p.level}</span></div>
       ${xpBar(total, { large: true, fill: 'var(--grass)' })}
       <div class="hero-stats">
         <span><b>${total}</b> XP total</span>
-        <span><b>${categories.length}</b> ${categories.length === 1 ? 'category' : 'categories'}</span>
-        <span><b>${countDoneToday(state, today)}</b> done today</span>
+        <span><b>${countDoneToday(state, today)}/${dailyTaskCount}</b> habits today</span>
+        <span><b>${state.weeklyGoals.filter((g) => g.weekOf === thisWeek && g.completed).length}/${state.weeklyGoals.filter((g) => g.weekOf === thisWeek).length}</b> goals this week</span>
       </div>
     </section>`;
 
-  const panels = categories.map((cat) => {
-    const tasks = state.dailyTasks.filter((t) => t.categoryId === cat.id);
-    const doneToday = tasks.filter((t) => t.completedDates.includes(today)).length;
-    const cp = levelProgress(cat.totalXP);
-    return `
-      <a class="panel panel--tap" href="#/category/${attr(cat.id)}">
-        <div class="panel__row">
-          <div class="icon-badge" style="background:${attr(cat.colour)}">${esc(cat.icon)}</div>
-          <div style="flex:1;min-width:0">
-            <h2 class="panel__title"><span class="name">${esc(cat.name)}</span>${streakBadge(cat, today)}</h2>
-            <div class="panel__sub">${tasks.length ? `${doneToday}/${tasks.length} daily tasks done` : 'No daily tasks yet'}</div>
-          </div>
-          <span class="level-chip">Lv <b>${cp.level}</b></span>
-        </div>
-        ${xpBar(cat.totalXP, { fill: cat.colour })}
-      </a>`;
-  }).join('');
+  const panels = categories.map((cat) => (isGoals(cat) ? goalPanel(state, cat, thisWeek) : dailyPanel(state, cat, today))).join('');
 
   const empty = `
     <section class="panel empty empty--big">
@@ -139,8 +135,67 @@ export function renderDashboard(state, ctx) {
       <a class="btn btn--cream btn--block" href="#/category/new">＋ Add category</a>` : empty}`;
 }
 
+function panelHead(cat, extra) {
+  const cp = levelProgress(cat.totalXP);
+  return `
+    <a class="panel__head" href="#/category/${attr(cat.id)}" aria-label="Open ${attr(cat.name)}">
+      <div class="icon-badge" style="background:${attr(cat.colour)}">${esc(cat.icon)}</div>
+      <div style="flex:1;min-width:0">
+        <h2 class="panel__title"><span class="name">${esc(cat.name)}</span>${extra}</h2>
+        <div class="panel__sub">${modeLabel(cat)}</div>
+      </div>
+      <span class="level-chip">Lv <b>${cp.level}</b></span>
+      <span class="chevron" aria-hidden="true">›</span>
+    </a>`;
+}
+
+/** Daily-driven variant: today's checklist, streak, XP bar. */
+function dailyPanel(state, cat, today) {
+  const tasks = state.dailyTasks.filter((t) => t.categoryId === cat.id);
+  const doneToday = tasks.filter((t) => isDoneOn(t, today)).length;
+  return `
+    <section class="panel panel--daily">
+      ${panelHead(cat, streakBadge(cat, today))}
+      ${xpBar(cat.totalXP, { fill: cat.colour })}
+      <div class="panel__section">
+        <div class="panel__section-title"><span>Today</span><span>${tasks.length ? `${doneToday}/${tasks.length}` : ''}</span></div>
+        ${tasks.length ? `<div class="list">${tasks.map((t) => taskItem(t, today, { compact: true })).join('')}</div>`
+          : `<button class="btn btn--cream btn--sm btn--block" data-action="add-task" data-category="${attr(cat.id)}">＋ Add your first daily task</button>`}
+      </div>
+    </section>`;
+}
+
+/** Goal-driven variant: this week's goals and milestone progress, no streak. */
+function goalPanel(state, cat, thisWeek) {
+  const goals = state.weeklyGoals.filter((g) => g.categoryId === cat.id && g.weekOf === thisWeek);
+  const open = state.milestones.filter((m) => m.categoryId === cat.id && !m.achieved);
+  const next = open[0];
+  const achieved = state.milestones.filter((m) => m.categoryId === cat.id && m.achieved).length;
+  const level = levelProgress(cat.totalXP).level;
+  return `
+    <section class="panel panel--goals">
+      ${panelHead(cat, '')}
+      ${xpBar(cat.totalXP, { fill: cat.colour })}
+      <div class="panel__section">
+        <div class="panel__section-title"><span>This week's goals</span><span>${goals.length ? `${goals.filter((g) => g.completed).length}/${goals.length}` : ''}</span></div>
+        ${goals.length ? `<div class="list">${goals.map((g) => goalItem(g, { compact: true })).join('')}</div>`
+          : `<button class="btn btn--cream btn--sm btn--block" data-action="add-goal" data-category="${attr(cat.id)}" data-week="${thisWeek}">＋ Set a goal for this week</button>`}
+      </div>
+      <div class="panel__section">
+        <div class="panel__section-title"><span>Next milestone</span><span>${achieved ? `🏆 ${achieved}` : ''}</span></div>
+        ${next ? `
+          <div class="milestone-row">
+            <div class="milestone-row__title">🎯 ${esc(next.title)}</div>
+            <div class="milestone-row__meta">Lv ${level} of ${next.targetLevel}</div>
+            <div class="minibar"><div class="minibar__fill" style="--pct:${Math.min(100, Math.round((level / next.targetLevel) * 100))}%"></div></div>
+          </div>`
+          : `<button class="btn btn--cream btn--sm btn--block" data-action="add-milestone" data-category="${attr(cat.id)}">＋ Add a milestone</button>`}
+      </div>
+    </section>`;
+}
+
 function countDoneToday(state, today) {
-  return state.dailyTasks.filter((t) => t.completedDates.includes(today)).length;
+  return state.dailyTasks.filter((t) => isDoneOn(t, today)).length;
 }
 
 // ---- Category detail -------------------------------------------------------
@@ -151,8 +206,42 @@ export function renderCategory(state, cat) {
   const goals = state.weeklyGoals.filter((g) => g.categoryId === cat.id && g.weekOf === thisWeek);
   const milestones = state.milestones.filter((m) => m.categoryId === cat.id);
   const p = levelProgress(cat.totalXP);
-  const doneToday = tasks.filter((t) => t.completedDates.includes(today)).length;
+  const doneToday = tasks.filter((t) => isDoneOn(t, today)).length;
   const allGoalsDone = goals.length > 0 && goals.every((g) => g.completed);
+  const goalsMode = isGoals(cat);
+
+  const stats = goalsMode
+    ? `<div class="stat"><b>${cat.totalXP}</b><span>Total XP</span></div>
+       <div class="stat"><b>${goals.filter((g) => g.completed).length}/${goals.length}</b><span>Goals this week</span></div>
+       <div class="stat"><b>${milestones.filter((m) => m.achieved).length}/${milestones.length}</b><span>Milestones</span></div>`
+    : `<div class="stat"><b>${cat.totalXP}</b><span>Total XP</span></div>
+       <div class="stat"><b>${cat.streakCount}</b><span>Day streak</span></div>
+       <div class="stat"><b>${doneToday}/${tasks.length}</b><span>Today</span></div>`;
+
+  const checkin = `
+    <div class="section-title">Today's check-in</div>
+    <section class="panel">
+      ${tasks.length ? `<div class="list">${tasks.map((t) => taskItem(t, today)).join('')}</div>`
+        : `<div class="empty">Add the small things you want to do every day. Each tick earns XP once per day, and the pencil adds a note (why it went well, why you skipped it).</div>`}
+      <button class="btn btn--cream btn--block" style="margin-top:12px" data-action="add-task" data-category="${attr(cat.id)}">＋ Add daily task</button>
+    </section>`;
+
+  const weekly = `
+    <div class="section-title">This week's goals · ${formatWeek(thisWeek)}</div>
+    <section class="panel">
+      ${goals.length ? `<div class="list">${goals.map((g) => goalItem(g)).join('')}</div>`
+        : `<div class="empty">${goalsMode ? 'Break the bigger target into something finishable by Sunday.' : 'No goals set for this week yet.'}</div>`}
+      ${goals.length ? `<div class="hint">${allGoalsDone ? `🎉 All done: <b>+${WEEKLY_BONUS_XP} XP</b> consistency bonus awarded.` : `Complete every goal for a <b>+${WEEKLY_BONUS_XP} XP</b> bonus.`}</div>` : ''}
+      <button class="btn btn--cream btn--block" style="margin-top:12px" data-action="add-goal" data-category="${attr(cat.id)}" data-week="${thisWeek}">＋ Add weekly goal</button>
+    </section>`;
+
+  const ms = `
+    <div class="section-title">Milestones</div>
+    <section class="panel">
+      ${milestones.length ? `<div class="list">${milestones.map((m) => milestoneItem(m, cat)).join('')}</div>`
+        : `<div class="empty">${goalsMode ? 'Name the outcome you’re working towards and the level it unlocks at, e.g. "Promoted to senior" at level 6.' : 'Set a level to aim for, like "Run a 10k" at level 5.'}</div>`}
+      <button class="btn btn--cream btn--block" style="margin-top:12px" data-action="add-milestone" data-category="${attr(cat.id)}">＋ Add milestone</button>
+    </section>`;
 
   return `
     <div class="topbar">
@@ -166,44 +255,22 @@ export function renderCategory(state, cat) {
         <div class="icon-badge icon-badge--lg" style="background:${attr(cat.colour)}">${esc(cat.icon)}</div>
         <div style="flex:1">
           <div class="hero-level"><span class="label">Level</span><span class="num display">${p.level}</span></div>
+          <div class="panel__sub">${modeLabel(cat)}</div>
         </div>
-        ${streakBadge(cat, today)}
+        ${goalsMode ? '' : streakBadge(cat, today)}
       </div>
       ${xpBar(cat.totalXP, { large: true, fill: cat.colour })}
-      <div class="stat-grid">
-        <div class="stat"><b>${cat.totalXP}</b><span>Total XP</span></div>
-        <div class="stat"><b>${cat.streakCount}</b><span>Day streak</span></div>
-        <div class="stat"><b>${doneToday}/${tasks.length}</b><span>Today</span></div>
-      </div>
+      <div class="stat-grid">${stats}</div>
     </section>
 
-    <div class="section-title">Today's check-in</div>
-    <section class="panel">
-      ${tasks.length ? `<div class="list">${tasks.map((t) => taskItem(t, today)).join('')}</div>`
-        : `<div class="empty">Add the small things you want to do every day. Each tick earns XP once per day.</div>`}
-      <button class="btn btn--cream btn--block" style="margin-top:12px" data-action="add-task" data-category="${attr(cat.id)}">＋ Add daily task</button>
-    </section>
-
-    <div class="section-title">This week's goals · ${formatWeek(thisWeek)}</div>
-    <section class="panel">
-      ${goals.length ? `<div class="list">${goals.map((g) => goalItem(g)).join('')}</div>`
-        : `<div class="empty">No goals set for this week yet.</div>`}
-      ${goals.length ? `<div class="hint">${allGoalsDone ? `🎉 All done: <b>+${WEEKLY_BONUS_XP} XP</b> consistency bonus awarded.` : `Complete every goal for a <b>+${WEEKLY_BONUS_XP} XP</b> bonus.`}</div>` : ''}
-      <button class="btn btn--cream btn--block" style="margin-top:12px" data-action="add-goal" data-category="${attr(cat.id)}" data-week="${thisWeek}">＋ Add weekly goal</button>
-    </section>
-
-    <div class="section-title">Milestones</div>
-    <section class="panel">
-      ${milestones.length ? `<div class="list">${milestones.map(milestoneItem).join('')}</div>`
-        : `<div class="empty">Set a level to aim for, like "Run a 10k" at level 5.</div>`}
-      <button class="btn btn--cream btn--block" style="margin-top:12px" data-action="add-milestone" data-category="${attr(cat.id)}">＋ Add milestone</button>
-    </section>`;
+    ${goalsMode ? weekly + ms + checkin : checkin + weekly + ms}`;
 }
 
 // ---- Category form ---------------------------------------------------------
 export function renderCategoryForm(cat, { colours, icons }) {
   const isEdit = !!cat;
-  const model = cat || { name: '', colour: colours[0], icon: icons[0] };
+  const model = cat || { name: '', colour: colours[0], icon: icons[0], mode: 'daily' };
+  const mode = model.mode === 'goals' ? 'goals' : 'daily';
   return `
     <div class="topbar">
       <a class="btn btn--cream btn--icon" href="${isEdit ? `#/category/${attr(cat.id)}` : '#/'}" aria-label="Back">‹</a>
@@ -217,6 +284,19 @@ export function renderCategoryForm(cat, { colours, icons }) {
       <div class="field">
         <label for="cat-name">Name</label>
         <input class="input" id="cat-name" name="name" required maxlength="32" placeholder="e.g. Fitness" value="${attr(model.name)}" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>Tracked by</label>
+        <div class="mode-toggle" role="radiogroup" aria-label="Tracked by">
+          <label class="mode-option">
+            <input type="radio" name="mode" value="daily" ${mode === 'daily' ? 'checked' : ''}>
+            <span class="mode-option__card"><b>Daily habits</b><small>A checklist you tick each day. Builds a streak.</small></span>
+          </label>
+          <label class="mode-option">
+            <input type="radio" name="mode" value="goals" ${mode === 'goals' ? 'checked' : ''}>
+            <span class="mode-option__card"><b>Goals & milestones</b><small>Project-style targets set week by week. No streak.</small></span>
+          </label>
+        </div>
       </div>
       <div class="field">
         <label>Colour</label>
@@ -259,6 +339,7 @@ export function renderWeekly(state, store) {
   const reviewed = state.meta.lastReviewedWeek === thisWeek;
   const lastGoals = state.weeklyGoals.filter((g) => g.weekOf === lastWeek);
   const lastEarned = weekXP(state, store, lastWeek);
+  const lastNotes = notesForWeek(state, lastWeek);
 
   const reviewSection = `
     <div class="section-title">Last week · ${formatWeek(lastWeek)}</div>
@@ -269,11 +350,13 @@ export function renderWeekly(state, store) {
         <div class="stat"><b>${lastGoals.filter((g) => g.completed).length}/${lastGoals.length}</b><span>Goals done</span></div>
         <div class="stat"><b>+${lastEarned}</b><span>XP earned</span></div>
       </div>
+      ${lastNotes.length ? `<div class="panel__section"><div class="panel__section-title"><span>Notes from the week</span></div>${noteLog(lastNotes)}</div>` : ''}
       ${reviewed ? `<div class="hint">✓ Reviewed. You can still tick goals you forgot.</div>`
         : `<button class="btn btn--sun btn--block" style="margin-top:12px" data-action="finish-review" data-week="${thisWeek}">Done reviewing, on to this week ›</button>`}
     </section>`;
 
   const thisGoals = state.weeklyGoals.filter((g) => g.weekOf === thisWeek);
+  const thisNotes = notesForWeek(state, thisWeek);
   const thisSection = `
     <div class="section-title">This week · ${formatWeek(thisWeek)}</div>
     <section class="panel">
@@ -281,6 +364,7 @@ export function renderWeekly(state, store) {
         : `<div class="empty">Set 1 to 3 goals per category. Bigger than a daily task, small enough to finish by Sunday.</div>`}
       <div class="hint">Finish every goal in a category for a <b>+${WEEKLY_BONUS_XP} XP</b> bonus.</div>
       <button class="btn btn--block" style="margin-top:12px" data-action="add-goal" data-week="${thisWeek}">＋ Add a goal for this week</button>
+      ${thisNotes.length ? `<div class="panel__section"><div class="panel__section-title"><span>Notes so far</span></div>${noteLog(thisNotes)}</div>` : ''}
     </section>`;
 
   return `
@@ -289,12 +373,36 @@ export function renderWeekly(state, store) {
     ${thisSection}`;
 }
 
+/** Every task log entry with a note in the given week, newest first. */
+function notesForWeek(state, weekOf) {
+  const end = addDays(weekOf, 6);
+  const out = [];
+  for (const t of state.dailyTasks) {
+    const cat = state.categories.find((c) => c.id === t.categoryId);
+    for (const c of t.completions || []) {
+      if (c.note && c.date >= weekOf && c.date <= end) out.push({ date: c.date, done: c.done !== false, note: c.note, task: t, cat });
+    }
+  }
+  return out.sort((a, b) => b.date.localeCompare(a.date) || a.task.title.localeCompare(b.task.title));
+}
+
+function noteLog(entries) {
+  return `<div class="note-log">${entries.map((e) => `
+    <div class="note ${e.done ? '' : 'note--skipped'}">
+      <div class="note__head">
+        <span class="note__mark">${e.done ? '✓' : '✗'}</span>
+        <span class="note__task">${esc(e.task.title)}</span>
+        <span class="note__meta">${e.cat ? esc(e.cat.icon) : ''} ${formatShort(e.date)}${e.done ? '' : ' · skipped'}</span>
+      </div>
+      <div class="note__text">${esc(e.note)}</div>
+    </div>`).join('')}</div>`;
+}
+
 function groupByCategory(goals, categories, store, weekOf) {
   return categories
     .map((cat) => {
       const mine = goals.filter((g) => g.categoryId === cat.id);
       if (!mine.length) return '';
-      const all = mine.every((g) => g.completed);
       const bonus = store.bonusAwarded(cat.id, weekOf);
       return `
         <div class="week-group">
@@ -303,7 +411,6 @@ function groupByCategory(goals, categories, store, weekOf) {
             <span class="bonus-pill ${bonus ? '' : 'bonus-pill--pending'}">${bonus ? `+${WEEKLY_BONUS_XP} bonus` : `${mine.filter((g) => g.completed).length}/${mine.length}`}</span>
           </div>
           <div class="list">${mine.map((g) => goalItem(g)).join('')}</div>
-          ${all && !bonus ? '' : ''}
         </div>`;
     })
     .join('');
@@ -322,7 +429,7 @@ export function renderSettings(state, ctx) {
   const rows = categories.map((c, i) => `
     <div class="item manage-row">
       <div class="icon-badge" style="background:${attr(c.colour)};width:38px;height:38px;font-size:1.2rem">${esc(c.icon)}</div>
-      <span class="name">${esc(c.name)}</span>
+      <span class="name">${esc(c.name)}<small>${modeLabel(c)}</small></span>
       <button class="btn btn--cream btn--icon" aria-label="Move up" data-action="move-category" data-id="${attr(c.id)}" data-dir="-1" ${i === 0 ? 'disabled' : ''}>↑</button>
       <button class="btn btn--cream btn--icon" aria-label="Move down" data-action="move-category" data-id="${attr(c.id)}" data-dir="1" ${i === categories.length - 1 ? 'disabled' : ''}>↓</button>
       <a class="btn btn--cream btn--icon" href="#/category/${attr(c.id)}/edit" aria-label="Edit">✎</a>
@@ -358,6 +465,7 @@ export function renderSettings(state, ctx) {
 
     <section class="panel">
       <button class="btn btn--ghost btn--block" data-action="reset">Reset app and delete all data</button>
+      <p class="hint">Brings back the four default categories with nothing in them.</p>
     </section>`;
 }
 
